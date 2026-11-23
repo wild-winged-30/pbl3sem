@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # SmartRoad: Image-Based Road Condition Monitoring, Mapping and Repair Prioritization
 
 Desktop prototype (C++17, GTK3, OpenCV) that finds potholes and cracks in road photos,
@@ -47,3 +48,6 @@ Data flow: GTK -> `processImage` -> `Defect` records -> `DefectManager` ranking 
 ## Limitations / future work
 Classical image processing is sensitive to lighting and texture; a trained detector (e.g. YOLO) would be
 more accurate. Routing uses straight-line graph edges, not real road data. Live GPS capture is not included.
+=======
+# pbl3sem
+>>>>>>> eb0e81fe2205d227f7b6484f21e957609beb3727
