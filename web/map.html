@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartRoad Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --asphalt: #23262b;
+    --asphalt-2: #2e3238;
+    --line: #444a52;
+    --paint: #f2c230;
+    --text: #eceef0;
+    --muted: #9aa1a9;
+    --sev1: #3fae6a; --sev2: #e3b928; --sev3: #ee7d2c; --sev4: #d93a45;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; color: var(--text); background: var(--asphalt); }
+  aside { width: 340px; flex: none; display: flex; flex-direction: column; background: var(--asphalt); border-right: 3px solid var(--paint); min-height: 0; }
+  header { padding: 18px 18px 12px; }
+  h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: .2px; }
+  header p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.45; }
+  .summary { display: flex; gap: 8px; padding: 0 18px 12px; flex-wrap: wrap; }
+  .chip { border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font-size: 12.5px; color: var(--text); background: var(--asphalt-2); }
+  .filter { padding: 0 18px 12px; display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+  select { background: var(--asphalt-2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; font: inherit; }
+  select:focus-visible, li:focus-visible { outline: 2px solid var(--paint); outline-offset: 1px; }
+  ul { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; border-top: 1px solid var(--line); }
+  li { display: grid; grid-template-columns: 34px 1fr auto; gap: 2px 10px; padding: 11px 18px; border-bottom: 1px solid var(--line); cursor: pointer; align-items: center; }
+  li:hover { background: var(--asphalt-2); }
+  .rank { grid-row: span 2; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #111; }
+  .title { font-weight: 600; font-size: 14.5px; }
+  .meta { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .score { grid-row: span 2; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12.5px; }
+  .flagged { color: var(--sev3); }
+  .route-note { padding: 10px 18px; font-size: 13px; border-top: 1px solid var(--line); color: var(--muted); }
+  .route-note b { color: var(--paint); }
+  #map { flex: 1; min-width: 0; }
+  .legend { background: rgba(35,38,43,.94); color: var(--text); padding: 8px 10px; border-radius: 6px; font-size: 12.5px; line-height: 1.7; }
+  .legend i { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+  .stop { background: var(--paint); color: #111; border: 2px solid #111; border-radius: 50%; width: 24px; height: 24px; display: grid; place-items: center; font-weight: 700; font-size: 12px; }
+  .leaflet-popup-content { font-family: inherit; font-size: 13.5px; line-height: 1.5; }
+  @media (max-width: 760px) { body { flex-direction: column-reverse; } aside { width: 100%; height: 45%; border-right: 0; border-top: 3px solid var(--paint); } }
+</style>
+</head>
+<body>
+<aside>
+  <header>
+    <h1>SmartRoad</h1>
+    <p>Reported road defects, most urgent first.</p>
+  </header>
+  <div class="summary" id="summary"></div>
+  <div class="filter"><label for="sev">Show</label>
+    <select id="sev">
+      <option value="0">All severities</option>
+      <option value="4">Critical only</option>
+      <option value="3">High and above</option>
+      <option value="2">Medium and above</option>
+    </select>
+  </div>
+  <ul id="list" aria-label="Defects by repair priority"></ul>
+  <div class="route-note" id="routeNote"></div>
+</aside>
+<div id="map" role="application" aria-label="Defect map"></div>
+
+<script src="data.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function () {
+  var D = window.SMARTROAD_DATA || { defects: [], route: null };
+  var COLORS = { 1: '#3fae6a', 2: '#e3b928', 3: '#ee7d2c', 4: '#d93a45' };
+  var SIZE = { 1: 7, 2: 9, 3: 11, 4: 13 };
+
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function measureText(d) {
+    return d.type === 'Pothole' ? (d.measure * 100).toFixed(1) + '% of road area' : (d.measure * 100).toFixed(0) + '% of image width';
+  }
+
+  var map = L.map('map');
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+  map.setView([22.5, 79], 5);
+
+  var markers = {}, markerLayer = L.layerGroup().addTo(map), routeLayer = L.layerGroup().addTo(map);
+
+  var legend = L.control({ position: 'bottomright' });
+  legend.onAdd = function () {
+    var div = L.DomUtil.create('div', 'legend');
+    div.innerHTML = [4, 3, 2, 1].map(function (l) {
+      return '<div><i style="background:' + COLORS[l] + '"></i>' + ['', 'Low', 'Medium', 'High', 'Critical'][l] + '</div>';
+    }).join('');
+    return div;
+  };
+  legend.addTo(map);
+
+  function popup(d) {
+    return '<b>#' + d.rank + ' ' + esc(d.type) + '</b> (id ' + d.id + ')<br>Severity: ' + esc(d.severity) +
+      '<br>Priority score: ' + d.score.toFixed(1) + '<br>Size: ' + measureText(d) + '<br>Photo: ' + esc(d.image) +
+      (d.located ? '<br>' + d.lat.toFixed(5) + ', ' + d.lon.toFixed(5) : '');
+  }
+
+  function render() {
+    var min = parseInt(document.getElementById('sev').value, 10);
+    var list = document.getElementById('list');
+    list.innerHTML = '';
+    markerLayer.clearLayers();
+    markers = {};
+    var bounds = [];
+    D.defects.filter(function (d) { return d.level >= min; }).forEach(function (d) {
+      var li = document.createElement('li');
+      li.tabIndex = 0;
+      li.innerHTML = '<span class="rank" style="background:' + COLORS[d.level] + '">' + d.rank + '</span>' +
+        '<span class="title">' + esc(d.type) + ' &ndash; ' + esc(d.severity) + '</span>' +
+        '<span class="score">' + d.score.toFixed(1) + '</span>' +
+        '<span class="meta ' + (d.located ? '' : 'flagged') + '">' + (d.located ? esc(d.image) : 'No GPS data, not on map') + '</span>';
+      list.appendChild(li);
+      if (d.located) {
+        var m = L.circleMarker([d.lat, d.lon], { radius: SIZE[d.level], color: '#111', weight: 2, fillColor: COLORS[d.level], fillOpacity: .95 }).bindPopup(popup(d));
+        m.addTo(markerLayer);
+        markers[d.id] = m;
+        bounds.push([d.lat, d.lon]);
+        var go = function () { map.setView([d.lat, d.lon], Math.max(map.getZoom(), 16)); m.openPopup(); };
+        li.addEventListener('click', go);
+        li.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+      }
+    });
+    if (bounds.length) map.fitBounds(bounds, { padding: [50, 50], maxZoom: 17 });
+    return bounds.length;
+  }
+
+  function renderRoute() {
+    var note = document.getElementById('routeNote');
+    routeLayer.clearLayers();
+    if (!D.route) { note.textContent = 'No route planned. Use "Plan route" in the application, then reopen the map.'; return; }
+    L.polyline(D.route.path, { color: '#f2c230', weight: 5, opacity: .9, dashArray: '10 8' }).addTo(routeLayer);
+    var byId = {};
+    D.defects.forEach(function (d) { byId[d.id] = d; });
+    D.route.order.forEach(function (id, i) {
+      var d = byId[id];
+      if (!d || !d.located) return;
+      L.marker([d.lat, d.lon], { icon: L.divIcon({ className: '', html: '<div class="stop">' + (i + 1) + '</div>', iconSize: [24, 24], iconAnchor: [12, 12] }), interactive: false }).addTo(routeLayer);
+    });
+    note.innerHTML = 'Route: <b>' + D.route.order.length + ' stops</b>, ' + D.route.totalKm.toFixed(2) + ' km along the shortest-path graph.';
+  }
+
+  var total = D.defects.length, located = D.defects.filter(function (d) { return d.located; }).length;
+  var crit = D.defects.filter(function (d) { return d.level === 4; }).length;
+  document.getElementById('summary').innerHTML =
+    '<span class="chip">' + total + ' defects</span><span class="chip">' + located + ' on map</span><span class="chip">' + crit + ' critical</span>';
+
+  document.getElementById('sev').addEventListener('change', render);
+  render();
+  renderRoute();
+})();
+</script>
+</body>
+</html>
